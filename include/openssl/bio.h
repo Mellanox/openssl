@@ -152,8 +152,12 @@ extern "C" {
  */
 
 #  define BIO_CTRL_GET_KTLS_SEND                 73
+#  define BIO_CTRL_GET_KTLS_RECV                 76
+
 #  define BIO_get_ktls_send(b)         \
      BIO_ctrl(b, BIO_CTRL_GET_KTLS_SEND, 0, NULL)
+#  define BIO_get_ktls_recv(b)         \
+     BIO_ctrl(b, BIO_CTRL_GET_KTLS_RECV, 0, NULL)
 
 /* modifiers */
 # define BIO_FP_READ             0x02
