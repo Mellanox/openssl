@@ -104,7 +104,7 @@ int tls1_change_cipher_state(SSL *s, int which)
     int reuse_dd = 0;
 #ifndef OPENSSL_NO_KTLS
     struct tls12_crypto_info_aes_gcm_128 crypto_info;
-    BIO *wbio;
+    BIO *bio;
     unsigned char geniv[12];
 #endif
 
@@ -332,8 +332,8 @@ int tls1_change_cipher_state(SSL *s, int which)
     if (s->compress)
         goto skip_ktls;
 
-    if ((which & SSL3_CC_READ) ||
-        ((which & SSL3_CC_WRITE) && (s->mode & SSL_MODE_NO_KTLS_TX)))
+    if (((which & SSL3_CC_READ) && (s->mode & SSL_MODE_NO_KTLS_RX))
+        || ((which & SSL3_CC_WRITE) && (s->mode & SSL_MODE_NO_KTLS_TX)))
         goto skip_ktls;
 
     /* ktls supports only the maximum fragment size */
@@ -350,19 +350,25 @@ int tls1_change_cipher_state(SSL *s, int which)
     if (s->version != TLS1_2_VERSION)
         goto skip_ktls;
 
-    wbio = s->wbio;
-    if (!ossl_assert(wbio != NULL)) {
+    if (which & SSL3_CC_WRITE)
+        bio = s->wbio;
+    else
+        bio = s->rbio;
+
+    if (!ossl_assert(bio != NULL)) {
         SSLfatal(s, SSL_AD_INTERNAL_ERROR, SSL_F_TLS1_CHANGE_CIPHER_STATE,
                  ERR_R_INTERNAL_ERROR);
         goto err;
     }
 
     /* All future data will get encrypted by ktls. Flush the BIO or skip ktls */
-    if (BIO_flush(wbio) <= 0)
-        goto skip_ktls;
+    if (which & SSL3_CC_WRITE)
+       if (BIO_flush(bio) <= 0)
+           goto skip_ktls;
 
     /* ktls doesn't support renegotiation */
-    if (BIO_get_ktls_send(s->wbio)) {
+    if ((BIO_get_ktls_send(s->wbio) && (which & SSL3_CC_WRITE)) ||
+        (BIO_get_ktls_recv(s->rbio) && (which & SSL3_CC_READ))) {
         SSLfatal(s, SSL_AD_NO_RENEGOTIATION, SSL_F_TLS1_CHANGE_CIPHER_STATE,
                  ERR_R_INTERNAL_ERROR);
         goto err;
@@ -379,12 +385,18 @@ int tls1_change_cipher_state(SSL *s, int which)
            TLS_CIPHER_AES_GCM_128_IV_SIZE);
     memcpy(crypto_info.salt, geniv, TLS_CIPHER_AES_GCM_128_SALT_SIZE);
     memcpy(crypto_info.key, key, EVP_CIPHER_key_length(c));
-    memcpy(crypto_info.rec_seq, &s->rlayer.write_sequence,
-           TLS_CIPHER_AES_GCM_128_REC_SEQ_SIZE);
+    if (which & SSL3_CC_WRITE)
+        memcpy(crypto_info.rec_seq, &s->rlayer.write_sequence,
+                TLS_CIPHER_AES_GCM_128_REC_SEQ_SIZE);
+    else
+        memcpy(crypto_info.rec_seq, &s->rlayer.read_sequence,
+                TLS_CIPHER_AES_GCM_128_REC_SEQ_SIZE);
+
 
     /* ktls works with user provided buffers directly */
-    if (BIO_set_ktls(wbio, &crypto_info, which & SSL3_CC_WRITE)) {
-        ssl3_release_write_buffer(s);
+    if (BIO_set_ktls(bio, &crypto_info, which & SSL3_CC_WRITE)) {
+        if (which & SSL3_CC_WRITE)
+            ssl3_release_write_buffer(s);
         SSL_set_options(s, SSL_OP_NO_RENEGOTIATION);
     }
 

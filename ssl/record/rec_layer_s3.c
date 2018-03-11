@@ -268,8 +268,9 @@ int ssl3_read_n(SSL *s, size_t n, size_t max, int extend, int clearold,
         return -1;
     }
 
-    /* We always act like read_ahead is set for DTLS */
-    if (!s->rlayer.read_ahead && !SSL_IS_DTLS(s))
+    /* Ktls always reads full reocrds.
+     * Also, we always act like read_ahead is set for DTLS */
+    if (!BIO_get_ktls_recv(s->rbio) && !s->rlayer.read_ahead && !SSL_IS_DTLS(s))
         /* ignore max parameter */
         max = n;
     else {

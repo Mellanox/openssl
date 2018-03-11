@@ -12,6 +12,7 @@
 #include <openssl/rand.h>
 #include "record_locl.h"
 #include "internal/cryptlib.h"
+#include <errno.h>
 
 static const unsigned char ssl3_pad_1[48] = {
     0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
@@ -207,8 +208,32 @@ int ssl3_get_record(SSL *s)
             rret = ssl3_read_n(s, SSL3_RT_HEADER_LENGTH,
                                SSL3_BUFFER_get_len(rbuf), 0,
                                num_recs == 0 ? 1 : 0, &n);
-            if (rret <= 0)
-                return rret;     /* error or non-blocking */
+            if (rret <= 0) {
+                if (!BIO_get_ktls_recv(s->rbio))
+                    return rret;     /* error or non-blocking */
+                else {
+                    switch (errno) {
+                    case EBADMSG:
+                        SSLfatal(s, SSL_AD_BAD_RECORD_MAC,
+                                SSL_F_SSL3_GET_RECORD,
+                                SSL_R_DECRYPTION_FAILED_OR_BAD_RECORD_MAC);
+                        break;
+                    case EMSGSIZE:
+                        SSLfatal(s, SSL_AD_RECORD_OVERFLOW,
+                                SSL_F_SSL3_GET_RECORD,
+                                SSL_R_PACKET_LENGTH_TOO_LONG);
+                        break;
+                    case EINVAL:
+                        SSLfatal(s, SSL_AD_PROTOCOL_VERSION,
+                                SSL_F_SSL3_GET_RECORD,
+                                SSL_R_WRONG_VERSION_NUMBER);
+                        break;
+                    default:
+                        break;
+                    }
+                    return rret;
+                }
+            }
             RECORD_LAYER_set_rstate(&s->rlayer, SSL_ST_READ_BODY);
 
             p = RECORD_LAYER_get_packet(&s->rlayer);
@@ -404,6 +429,7 @@ int ssl3_get_record(SSL *s)
         } else {
             more = thisrr->length;
         }
+
         if (more > 0) {
             /* now s->packet_length == SSL3_RT_HEADER_LENGTH */
 
@@ -490,6 +516,9 @@ int ssl3_get_record(SSL *s)
 
         return 1;
     }
+
+    if (BIO_get_ktls_recv(s->rbio))
+        goto skip_decryption;
 
     /*
      * If in encrypt-then-mac mode calculate mac from encrypted record. All
@@ -677,6 +706,8 @@ int ssl3_get_record(SSL *s)
                  SSL_R_DECRYPTION_FAILED_OR_BAD_RECORD_MAC);
         return -1;
     }
+
+ skip_decryption:
 
     for (j = 0; j < num_recs; j++) {
         thisrr = &rr[j];
